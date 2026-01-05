@@ -1,3 +1,1 @@
-# torn-territory-planner
-planing / claiming territories
-Test1234
+Deploy this
