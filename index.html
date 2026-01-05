@@ -41,13 +41,45 @@
 
     /* SVG polygon styling */
     #overlay svg{width:100%;height:100%;}
-    #overlay polygon{fill:rgba(0,0,0,0);stroke:var(--stroke);stroke-width:1;cursor:pointer;vector-effect:non-scaling-stroke;}
+    #overlay polygon{
+      fill:rgba(0,0,0,0);
+      stroke:var(--stroke);
+      stroke-width:1;
+      cursor:pointer;
+      vector-effect:non-scaling-stroke;
+    }
     #overlay polygon:hover{stroke:rgba(255,255,255,.55);stroke-width:2;}
-    #overlay polygon.owned{fill:var(--own-fill, rgba(59,130,246,.25));stroke:rgba(255,255,255,.18);}
+    #overlay polygon.owned{
+      fill:var(--own-fill, rgba(59,130,246,.45));
+      stroke:rgba(255,255,255,.25);
+    }
     #overlay polygon.neighbor{stroke:var(--neighbor-stroke);stroke-width:3;}
     #overlay polygon.selected{stroke:var(--selected-stroke);stroke-width:4;}
     #overlay polygon.war{stroke:var(--war-stroke);stroke-width:4;}
     #overlay polygon.war.selected{stroke-width:5;}
+
+    /* Territory labels (owner names on top of tiles) */
+    #overlay text.terr-label{
+      fill: rgba(255,255,255,.92);
+      font-size: 10px;
+      font-weight: 800;
+      text-anchor: middle;
+      dominant-baseline: middle;
+      paint-order: stroke;
+      stroke: rgba(0,0,0,.65);
+      stroke-width: 3px;
+      pointer-events: none;
+      user-select: none;
+    }
+
+    /* Neighbor arrows */
+    #overlay g#arrows{ pointer-events:none; }
+    #overlay line.nei-arrow{
+      stroke: rgba(34,197,94,.95);
+      stroke-width: 2px;
+      vector-effect: non-scaling-stroke;
+      opacity: .9;
+    }
 
     @media (max-width: 900px){
       #app{grid-template-columns:1fr;grid-template-rows:auto 1fr;}
@@ -61,7 +93,7 @@
     <div class="row" style="justify-content:space-between;align-items:flex-start;">
       <div>
         <h1 class="h1">Territory Planner</h1>
-        <div class="small">Click a territory to set owner + notes. Neighbors highlight in green.</div>
+        <div class="small">Click a territory to set owner + notes. Neighbors highlight in green, arrows show directions.</div>
       </div>
       <div class="pill" title="Selected territory ID">
         <span class="swatch" id="selSwatch" style="background:rgba(255,255,255,.25)"></span>
@@ -125,15 +157,15 @@
 
 <script>
   // ---------- Storage ----------
-  const LS_KEY = "tornTerritoryPlanner.v2";
+  const LS_KEY = "tornTerritoryPlanner.v3";
 
   const defaultOwners = [
     { id: "unassigned", name: "Unassigned", color: "rgba(255,255,255,.12)" },
-    { id: "blue", name: "Blue", color: "rgba(59,130,246,.35)" },
-    { id: "pink", name: "Pink", color: "rgba(236,72,153,.35)" },
-    { id: "green", name: "Green", color: "rgba(34,197,94,.35)" },
-    { id: "yellow", name: "Yellow", color: "rgba(250,204,21,.35)" },
-    { id: "red", name: "Red", color: "rgba(239,68,68,.35)" },
+    { id: "blue", name: "Blue", color: "rgba(59,130,246,.45)" },
+    { id: "pink", name: "Pink", color: "rgba(236,72,153,.45)" },
+    { id: "green", name: "Green", color: "rgba(34,197,94,.45)" },
+    { id: "yellow", name: "Yellow", color: "rgba(250,204,21,.45)" },
+    { id: "red", name: "Red", color: "rgba(239,68,68,.45)" },
   ];
 
   function loadState(){
@@ -157,56 +189,14 @@
   // ---------- Data files ----------
   let graph = null; // territoryId -> [neighborIds]
   let polygons = [];
+  let labelByTerrId = new Map();
+  let centroidByTerrId = new Map();
 
-  async function loadSvgOverlay(){
-    const res = await fetch("./territory_polygons_overlay.svg", { cache: "no-store" });
-    if(!res.ok) throw new Error("territory_polygons_overlay.svg not found");
-    const svgText = await res.text();
-    document.getElementById("overlay").innerHTML = svgText;
-    const svg = document.querySelector("#overlay svg");
-    polygons = Array.from(svg.querySelectorAll("polygon"));
-  }
-
-  async function tryLoadGraph(){
-    try{
-      const res = await fetch("./connections.json", { cache: "no-store" });
-      if(!res.ok) throw new Error("connections.json not found");
-      const payload = await res.json();
-      graph = payload.territories_neighbors || payload;
-      if(!graph || typeof graph !== "object") throw new Error("bad graph");
-      document.getElementById("graphStatus").textContent = "loaded";
-    }catch{
-      graph = null;
-      document.getElementById("graphStatus").textContent = "not loaded";
-    }
-  }
-
-  async function tryLoadWars(){
-    try{
-      const res = await fetch("./wars.json", { cache: "no-store" });
-      if(!res.ok) throw new Error("wars.json not found");
-      const payload = await res.json();
-      // expects: { wars: ["12","500", ...] } OR ["12","500"...]
-      const list = Array.isArray(payload) ? payload : (payload.wars || []);
-      state.wars = list.map(String);
-      saveState();
-      document.getElementById("warsStatus").textContent = "loaded";
-    }catch{
-      document.getElementById("warsStatus").textContent = "not loaded";
-    }
-  }
-
-  // ---------- UI ----------
+  // ---------- Helpers ----------
   const $ = (id) => document.getElementById(id);
-  const ownerSel = $("ownerSel");
-  const noteBox = $("noteBox");
-  const selId = $("selId");
-  const selSwatch = $("selSwatch");
-  const neighborsBox = $("neighborsBox");
-  const legend = $("legend");
 
   function terrIdForPoly(poly){
-    // your SVG already has data-comp that matches the neighbor graph keys
+    // SVG has data-comp that matches neighbor graph keys
     return String(poly.getAttribute("data-comp") || poly.id.replace(/^t/, ""));
   }
 
@@ -214,189 +204,87 @@
     return state.owners.find(o => o.id === id) || state.owners[0];
   }
 
-  function renderOwners(){
-    ownerSel.innerHTML = "";
-    for(const o of state.owners){
-      const opt = document.createElement("option");
-      opt.value = o.id;
-      opt.textContent = o.name;
-      ownerSel.appendChild(opt);
-    }
-    renderLegend();
+  function parsePoints(pointsStr){
+    // "x,y x,y x,y"
+    return pointsStr
+      .trim()
+      .split(/\s+/)
+      .map(pair => pair.split(",").map(Number))
+      .filter(p => p.length === 2 && Number.isFinite(p[0]) && Number.isFinite(p[1]));
   }
 
-  function renderLegend(){
-    legend.innerHTML = "";
-    for(const o of state.owners.filter(x => x.id !== "unassigned")){
-      const div = document.createElement("div");
-      div.className = "pill";
-      div.innerHTML = `<span class="swatch" style="background:${o.color}"></span><span>${o.name}</span>`;
-      legend.appendChild(div);
-    }
+  function centroidOfPolygon(points){
+    // Average of points (good enough for label/arrow placement)
+    let x = 0, y = 0;
+    for (const [px, py] of points) { x += px; y += py; }
+    const n = points.length || 1;
+    return [x / n, y / n];
   }
 
-  function applyPlanToMap(){
+  function ensureLabels(svg){
+    // Create a group for labels (on top)
+    let g = svg.querySelector("g#labels");
+    if(!g){
+      g = document.createElementNS("http://www.w3.org/2000/svg", "g");
+      g.setAttribute("id", "labels");
+      svg.appendChild(g);
+    }
+
+    labelByTerrId.clear();
     for(const poly of polygons){
       const id = terrIdForPoly(poly);
-      const entry = state.plan[id];
+      const pts = parsePoints(poly.getAttribute("points") || "");
+      if(pts.length < 3) continue;
 
-      poly.classList.remove("owned");
-      poly.style.removeProperty("--own-fill");
+      const [cx, cy] = centroidOfPolygon(pts);
 
-      if(entry && entry.ownerId && entry.ownerId !== "unassigned"){
-        const o = ownerById(entry.ownerId);
-        poly.classList.add("owned");
-        poly.style.setProperty("--own-fill", o.color);
-      }
+      const t = document.createElementNS("http://www.w3.org/2000/svg", "text");
+      t.classList.add("terr-label");
+      t.setAttribute("data-terr", id);
+      t.setAttribute("x", cx);
+      t.setAttribute("y", cy);
+      t.textContent = "";
+      g.appendChild(t);
 
-      poly.classList.toggle("war", state.wars.includes(id));
+      labelByTerrId.set(id, t);
     }
   }
 
-  let selectedId = null;
-  function clearSelectionStyles(){
-    polygons.forEach(p => p.classList.remove("selected", "neighbor"));
-  }
-
-  function setSelected(id){
-    selectedId = id;
-    selId.textContent = id || "None";
-    clearSelectionStyles();
-
-    if(!id){
-      neighborsBox.textContent = "Select a territory to see its neighbors.";
-      ownerSel.value = "unassigned";
-      noteBox.value = "";
-      selSwatch.style.background = "rgba(255,255,255,.25)";
-      return;
-    }
-
-    const poly = polygons.find(p => terrIdForPoly(p) === id);
-    if(poly) poly.classList.add("selected");
-
-    const entry = state.plan[id] || { ownerId: "unassigned", note: "" };
-    ownerSel.value = entry.ownerId || "unassigned";
-    noteBox.value = entry.note || "";
-
-    const o = ownerById(ownerSel.value);
-    selSwatch.style.background = o.color || "rgba(255,255,255,.25)";
-
-    if(!graph){
-      neighborsBox.textContent = "Neighbor graph not loaded. Add connections.json to enable.";
-      return;
-    }
-
-    const neigh = graph[id] || graph[Number(id)] || [];
-    const neighIds = neigh.map(String);
-    neighborsBox.textContent = neighIds.length ? neighIds.join(", ") : "(none)";
-    for(const p of polygons){
-      if(neighIds.includes(terrIdForPoly(p))) p.classList.add("neighbor");
+  function buildCentroidCache(){
+    centroidByTerrId.clear();
+    for(const poly of polygons){
+      const id = terrIdForPoly(poly);
+      const pts = parsePoints(poly.getAttribute("points") || "");
+      if(pts.length < 3) continue;
+      centroidByTerrId.set(id, centroidOfPolygon(pts));
     }
   }
 
-  function wireMapClicks(){
-    polygons.forEach(poly => {
-      poly.addEventListener("click", (e) => {
-        e.preventDefault(); e.stopPropagation();
-        setSelected(terrIdForPoly(poly));
-      });
-    });
-    document.querySelector("#mapinner").addEventListener("click", () => setSelected(null));
-  }
-
-  // buttons
-  $("saveBtn").addEventListener("click", () => {
-    if(!selectedId) return;
-    const ownerId = ownerSel.value;
-    const note = noteBox.value || "";
-    if(ownerId === "unassigned" && !note.trim()){
-      delete state.plan[selectedId];
-    }else{
-      state.plan[selectedId] = { ownerId, note };
+  function ensureArrowLayer(svg){
+    // defs + arrowhead marker
+    let defs = svg.querySelector("defs");
+    if(!defs){
+      defs = document.createElementNS("http://www.w3.org/2000/svg", "defs");
+      svg.insertBefore(defs, svg.firstChild);
     }
-    saveState();
-    applyPlanToMap();
-    setSelected(selectedId);
-  });
 
-  $("clearBtn").addEventListener("click", () => {
-    if(!selectedId) return;
-    delete state.plan[selectedId];
-    saveState();
-    applyPlanToMap();
-    setSelected(selectedId);
-  });
+    if(!svg.querySelector("#arrowhead")){
+      const marker = document.createElementNS("http://www.w3.org/2000/svg", "marker");
+      marker.setAttribute("id", "arrowhead");
+      marker.setAttribute("markerWidth", "8");
+      marker.setAttribute("markerHeight", "8");
+      marker.setAttribute("refX", "7");
+      marker.setAttribute("refY", "4");
+      marker.setAttribute("orient", "auto");
+      marker.setAttribute("markerUnits", "strokeWidth");
 
-  ownerSel.addEventListener("change", () => {
-    const o = ownerById(ownerSel.value);
-    selSwatch.style.background = o.color;
-  });
+      const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+      path.setAttribute("d", "M0,0 L8,4 L0,8 Z");
+      path.setAttribute("fill", "rgba(34,197,94,.95)");
+      marker.appendChild(path);
+      defs.appendChild(marker);
+    }
 
-  $("addOwnerBtn").addEventListener("click", () => {
-    const name = prompt("Owner/team name?");
-    if(!name) return;
-    const color = prompt("CSS color (e.g. rgba(59,130,246,.35) or #ff00ff33)", "rgba(59,130,246,.35)") || "rgba(255,255,255,.18)";
-    const id = name.toLowerCase().replace(/\s+/g,"-").replace(/[^a-z0-9\-]/g,"").slice(0,24) || ("owner-" + Math.random().toString(16).slice(2,8));
-    state.owners.push({ id, name, color });
-    saveState();
-    renderOwners();
-  });
-
-  $("exportBtn").addEventListener("click", () => {
-    const payload = JSON.stringify(state, null, 2);
-    const blob = new Blob([payload], { type: "application/json" });
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = "territory-plan.json";
-    a.click();
-    URL.revokeObjectURL(a.href);
-  });
-
-  $("importBtn").addEventListener("click", async () => {
-    const input = document.createElement("input");
-    input.type = "file";
-    input.accept = "application/json";
-    input.onchange = async () => {
-      const file = input.files && input.files[0];
-      if(!file) return;
-      const text = await file.text();
-      try{
-        const parsed = JSON.parse(text);
-        state = {
-          owners: Array.isArray(parsed.owners) && parsed.owners.length ? parsed.owners : state.owners,
-          plan: parsed.plan && typeof parsed.plan === "object" ? parsed.plan : {},
-          wars: Array.isArray(parsed.wars) ? parsed.wars.map(String) : [],
-        };
-        saveState();
-        renderOwners();
-        applyPlanToMap();
-        setSelected(selectedId);
-      }catch{
-        alert("Invalid JSON.");
-      }
-    };
-    input.click();
-  });
-
-  $("resetBtn").addEventListener("click", () => {
-    if(!confirm("Reset all saved owners + plans?")) return;
-    localStorage.removeItem(LS_KEY);
-    state = { owners: defaultOwners, plan: {}, wars: [] };
-    saveState();
-    renderOwners();
-    applyPlanToMap();
-    setSelected(null);
-  });
-
-  // boot
-  (async () => {
-    renderOwners();
-    await loadSvgOverlay();
-    await tryLoadGraph();
-    await tryLoadWars();
-    wireMapClicks();
-    applyPlanToMap();
-  })();
-</script>
-</body>
-</html>
+    let g = svg.querySelector("g#arrows");
+    if(!g){
+      g = document.createElementNS("http://www.w3.org/2000/svg", "g
