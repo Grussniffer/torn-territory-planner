@@ -25,9 +25,9 @@
     #mapimg{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;}
     #overlay{position:absolute;inset:0;width:100%;height:100%;}
     .h1{font-size:18px;font-weight:700;margin:0 0 10px 0;}
-    .row{display:flex;gap:10px;align-items:center;}
+    .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;}
     label{display:block;font-size:12px;color:var(--muted);margin:12px 0 6px;}
-    select, textarea, input[type="text"]{
+    select, textarea{
       width:100%;
       background:rgba(255,255,255,.06);
       border:1px solid rgba(255,255,255,.14);
@@ -58,7 +58,6 @@
     .small{font-size:12px;color:var(--muted);}
     .hr{height:1px;background:rgba(255,255,255,.12);margin:14px 0;}
     .list{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px;}
-    .kbd{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace;font-size:12px;color:rgba(255,255,255,.85);}
 
     /* SVG styling */
     #overlay svg{width:100%;height:100%;}
@@ -115,13 +114,8 @@
     <div class="row" style="justify-content:space-between;align-items:flex-start;">
       <div>
         <h1 class="h1">Territory Planner</h1>
-        <div class="small">
-          Click a tile → set owner + notes → <span class="kbd">Save</span>.
-          Neighbors highlight (green) and arrows show links.
-        </div>
-        <div class="small" style="margin-top:6px;">
-          Shared plan is loaded from <span class="kbd">shared_plan.json</span> (auto-refresh).
-        </div>
+        <div class="small">Click a tile → choose owner → Save. Neighbors highlight + arrows.</div>
+        <div class="small" style="margin-top:6px;">Shared plan loads from <b>shared_plan.json</b> (auto refresh).</div>
       </div>
       <div class="pill" title="Selected territory ID">
         <span class="swatch" id="selSwatch" style="background:rgba(255,255,255,.25)"></span>
@@ -137,12 +131,12 @@
 
     <div class="row" style="margin-top:10px;">
       <button class="primary" id="saveBtn">Save (local)</button>
-      <button class="danger" id="clearBtn" title="Clear owner + notes for selected territory">Clear</button>
+      <button class="danger" id="clearBtn">Clear</button>
     </div>
 
     <div class="small" style="margin-top:8px;">
-      <b>Publishing to everyone:</b> click <span class="kbd">Export shared_plan.json</span>, then commit it to the repo.
-      (GitHub Pages is static, so the browser can’t push changes directly.)
+      GitHub Pages is static, so “Save” stores locally in your browser.
+      To publish for everyone, export <b>shared_plan.json</b> and commit it to the repo.
     </div>
 
     <div class="hr"></div>
@@ -152,20 +146,16 @@
 
     <div class="hr"></div>
 
-    <label>Shared plan controls</label>
-    <div class="row" style="flex-wrap:wrap;">
+    <label>Shared plan</label>
+    <div class="row">
       <button id="exportSharedBtn">Export shared_plan.json</button>
-      <button id="reloadSharedBtn">Reload shared plan now</button>
+      <button id="reloadSharedBtn">Reload shared now</button>
     </div>
 
     <div class="hr"></div>
 
-    <label>Local data</label>
-    <div class="row" style="flex-wrap:wrap;">
-      <button id="exportBtn">Export local plan</button>
-      <button id="importBtn">Import local plan</button>
-      <button class="danger" id="resetBtn" title="Reset local data only">Reset local</button>
-    </div>
+    <label>Legend</label>
+    <div class="list" id="legend"></div>
 
     <div class="hr"></div>
 
@@ -173,14 +163,8 @@
     <div class="small">
       Overlay: <span id="overlayStatus">loading...</span><br/>
       Neighbors: <span id="graphStatus">not loaded</span><br/>
-      Shared plan: <span id="sharedStatus">not loaded</span><br/>
-      Wars: <span id="warsStatus">not loaded</span>
+      Shared: <span id="sharedStatus">not loaded</span>
     </div>
-
-    <div class="hr"></div>
-
-    <label>Legend</label>
-    <div class="list" id="legend"></div>
   </aside>
 
   <main id="mapwrap">
@@ -192,18 +176,15 @@
 </div>
 
 <script>
-  // ------------------------------------------------------------
-  // Files expected next to index.html:
+  // Files in repo root:
+  // - index.html
   // - map.png
   // - territory_polygons_overlay.svg
-  // - connections.json          (neighbors graph; optional but recommended)
-  // - shared_plan.json          (shared plan; recommended)
-  // - wars.json                 (optional; later via GitHub Action)
-  // ------------------------------------------------------------
+  // - connections.json (optional but recommended)
+  // - shared_plan.json (recommended)
 
-  const LS_KEY = "tornTerritoryPlanner.local.v1";
+  const LS_KEY = "tornTerritoryPlanner.local.v2";
 
-  // Your default factions list (from your Discord list)
   const defaultOwnerNames = [
     "ht","tnu","tgr","lads","vr","ib","unt","koa","hh","vth","odyssey","trc","ufd","jokerz","ap"
   ];
@@ -213,54 +194,48 @@
     ...defaultOwnerNames.map(n => ({ id: n, name: n }))
   ];
 
-  function loadLocalState(){
-    try{
-      const raw = localStorage.getItem(LS_KEY);
-      if(!raw) return { owners: defaultOwners, plan: {}, wars: [] };
-      const s = JSON.parse(raw);
-      return {
-        owners: Array.isArray(s.owners) && s.owners.length ? s.owners : defaultOwners,
-        plan: s.plan && typeof s.plan === "object" ? s.plan : {},
-        wars: Array.isArray(s.wars) ? s.wars : [],
-      };
-    }catch{
-      return { owners: defaultOwners, plan: {}, wars: [] };
-    }
-  }
-  function saveLocalState(){ localStorage.setItem(LS_KEY, JSON.stringify(localState)); }
+  // State currently rendered on the map (starts from shared, then local overrides when you save)
+  let sharedState = { owners: defaultOwners, plan: {}, wars: [] };
+  let localOverrides = loadLocalOverrides(); // { plan: { [territoryId]: {ownerId,note} } }
 
-  // This is what the user edits locally in the browser
-  let localState = loadLocalState();
-
-  // This is what everyone sees by default (loaded from shared_plan.json)
-  // Note: We render sharedPlanState on the map, but allow local edits for drafting.
-  let sharedPlanState = { owners: defaultOwners, plan: {}, wars: [] };
-
-  // Neighbor graph
+  // Neighbors graph
   let graph = null;
 
-  // SVG overlay objects
+  // Overlay objects
   let polygons = [];
   let labelByTerrId = new Map();
   let centroidByTerrId = new Map();
 
-  // UI helpers
+  // UI
   const $ = (id) => document.getElementById(id);
+  const ownerSel = $("ownerSel");
+  const noteBox = $("noteBox");
+  const selId = $("selId");
+  const selSwatch = $("selSwatch");
+  const neighborsBox = $("neighborsBox");
+  const legend = $("legend");
 
-  function normalizeOwnerId(name){
-    return String(name).toLowerCase().trim().replace(/\s+/g,"-").replace(/[^a-z0-9\-]/g,"").slice(0,32) || "owner";
+  let selectedId = null;
+
+  function loadLocalOverrides(){
+    try{
+      const raw = localStorage.getItem(LS_KEY);
+      if(!raw) return { plan: {} };
+      const obj = JSON.parse(raw);
+      return { plan: (obj.plan && typeof obj.plan === "object") ? obj.plan : {} };
+    }catch{
+      return { plan: {} };
+    }
+  }
+  function saveLocalOverrides(){
+    localStorage.setItem(LS_KEY, JSON.stringify(localOverrides));
   }
 
   function colorForOwnerId(id){
-    // deterministic HSL based on string hash
     let h = 0;
     for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0;
     const hue = h % 360;
     return `hsla(${hue}, 85%, 55%, 0.45)`;
-  }
-
-  function ownerById(stateObj, id){
-    return stateObj.owners.find(o => o.id === id) || stateObj.owners[0];
   }
 
   function terrIdForPoly(poly){
@@ -403,7 +378,7 @@
     const res = await fetch("./territory_polygons_overlay.svg", { cache: "no-store" });
     if(!res.ok) throw new Error("territory_polygons_overlay.svg not found");
     const svgText = await res.text();
-    document.getElementById("overlay").innerHTML = svgText;
+    $("overlay").innerHTML = svgText;
 
     const svg = document.querySelector("#overlay svg");
     polygons = Array.from(svg.querySelectorAll("polygon"));
@@ -429,60 +404,40 @@
     }
   }
 
-  async function tryLoadWars(){
-    // Optional (later): wars.json generated by server-side action
-    try{
-      const res = await fetch("./wars.json", { cache: "no-store" });
-      if(!res.ok) throw new Error("wars.json not found");
-      const payload = await res.json();
-      const list = Array.isArray(payload) ? payload : (payload.wars || []);
-      sharedPlanState.wars = list.map(String);
-      $("warsStatus").textContent = "loaded";
-    }catch{
-      $("warsStatus").textContent = "not loaded";
-    }
-  }
-
   async function loadSharedPlan(){
     try{
       const res = await fetch("./shared_plan.json", { cache: "no-store" });
       if(!res.ok) throw new Error("shared_plan.json not found");
       const shared = await res.json();
 
-      sharedPlanState = {
+      sharedState = {
         owners: Array.isArray(shared.owners) && shared.owners.length ? shared.owners : defaultOwners,
-        plan: shared.plan && typeof shared.plan === "object" ? shared.plan : {},
-        wars: Array.isArray(shared.wars) ? shared.wars.map(String) : (sharedPlanState.wars || [])
+        plan: (shared.plan && typeof shared.plan === "object") ? shared.plan : {},
+        wars: Array.isArray(shared.wars) ? shared.wars.map(String) : []
       };
-
-      // Keep local owners in sync too (so dropdown matches)
-      localState.owners = sharedPlanState.owners;
-      saveLocalState();
-
-      renderOwners(sharedPlanState);
-      renderLegend(sharedPlanState);
-      applyStateToMap(sharedPlanState);
-      setSelected(selectedId);
 
       $("sharedStatus").textContent = "loaded";
     }catch(e){
+      // fall back to defaults
+      sharedState = { owners: defaultOwners, plan: {}, wars: [] };
       $("sharedStatus").textContent = "not loaded";
-      // Still show whatever local has, as fallback
-      renderOwners(localState);
-      renderLegend(localState);
-      applyStateToMap(localState);
-      setSelected(selectedId);
       console.warn("Shared plan not loaded:", e.message);
     }
+
+    renderOwners(sharedState);
+    renderLegend(sharedState);
+    applyPlanToMap(getEffectiveState());
+    setSelected(selectedId);
   }
 
-  // UI elements
-  const ownerSel = $("ownerSel");
-  const noteBox = $("noteBox");
-  const selId = $("selId");
-  const selSwatch = $("selSwatch");
-  const neighborsBox = $("neighborsBox");
-  const legend = $("legend");
+  function getEffectiveState(){
+    // local overrides overwrite shared for display
+    return {
+      owners: sharedState.owners,
+      wars: sharedState.wars,
+      plan: { ...sharedState.plan, ...localOverrides.plan }
+    };
+  }
 
   function renderOwners(stateObj){
     ownerSel.innerHTML = "";
@@ -496,7 +451,8 @@
 
   function renderLegend(stateObj){
     legend.innerHTML = "";
-    for(const o of stateObj.owners.filter(x => x.id !== "unassigned")){
+    for(const o of stateObj.owners){
+      if(o.id === "unassigned") continue;
       const div = document.createElement("div");
       div.className = "pill";
       div.innerHTML = `<span class="swatch" style="background:${colorForOwnerId(o.id)}"></span><span>${o.name}</span>`;
@@ -504,37 +460,30 @@
     }
   }
 
-  function applyStateToMap(stateObj){
+  function applyPlanToMap(stateObj){
     for(const poly of polygons){
       const id = terrIdForPoly(poly);
       const entry = stateObj.plan[id];
 
       poly.classList.remove("owned");
       poly.style.removeProperty("--own-fill");
+      poly.classList.toggle("war", (stateObj.wars || []).includes(id));
 
       if(entry && entry.ownerId && entry.ownerId !== "unassigned"){
         poly.classList.add("owned");
         poly.style.setProperty("--own-fill", colorForOwnerId(entry.ownerId));
       }
 
-      // war highlighting (from sharedPlanState primarily)
-      const warsList = (stateObj.wars || []).map(String);
-      poly.classList.toggle("war", warsList.includes(id));
-
-      // owner label text
       const label = labelByTerrId.get(id);
       if(label){
         if(entry && entry.ownerId && entry.ownerId !== "unassigned"){
-          const o = ownerById(stateObj, entry.ownerId);
-          label.textContent = o?.name || entry.ownerId;
-        } else {
+          label.textContent = entry.ownerId; // owner id == your short faction name
+        }else{
           label.textContent = "";
         }
       }
     }
   }
-
-  let selectedId = null;
 
   function clearSelectionStyles(){
     polygons.forEach(p => p.classList.remove("selected", "neighbor"));
@@ -557,8 +506,9 @@
     const poly = polygons.find(p => terrIdForPoly(p) === id);
     if(poly) poly.classList.add("selected");
 
-    // When selecting, edit localState by default (draft changes locally)
-    const entry = localState.plan[id] || sharedPlanState.plan[id] || { ownerId: "unassigned", note: "" };
+    const effective = getEffectiveState();
+    const entry = effective.plan[id] || { ownerId: "unassigned", note: "" };
+
     ownerSel.value = entry.ownerId || "unassigned";
     noteBox.value = entry.note || "";
 
@@ -567,7 +517,7 @@
       : colorForOwnerId(ownerSel.value);
 
     if(!graph){
-      neighborsBox.textContent = "Neighbor graph not loaded. Add connections.json to enable.";
+      neighborsBox.textContent = "Neighbor graph not loaded (connections.json missing).";
       clearArrows();
       return;
     }
@@ -593,34 +543,29 @@
     document.querySelector("#mapinner").addEventListener("click", () => setSelected(null));
   }
 
-  // Save local draft changes
+  // Local save (overrides shared)
   $("saveBtn").addEventListener("click", () => {
     if(!selectedId) return;
 
-    // If owner selected doesn't exist in owners, add it (shouldn't happen normally)
     const ownerId = ownerSel.value;
     const note = noteBox.value || "";
 
     if(ownerId === "unassigned" && !note.trim()){
-      delete localState.plan[selectedId];
+      delete localOverrides.plan[selectedId];
     }else{
-      localState.plan[selectedId] = { ownerId, note };
+      localOverrides.plan[selectedId] = { ownerId, note };
     }
 
-    // Keep local owners synced with shared owners
-    localState.owners = sharedPlanState.owners;
-    saveLocalState();
-
-    // Render local over shared (draft view)
-    applyStateToMap(mergeSharedWithLocal(sharedPlanState, localState));
+    saveLocalOverrides();
+    applyPlanToMap(getEffectiveState());
     setSelected(selectedId);
   });
 
   $("clearBtn").addEventListener("click", () => {
     if(!selectedId) return;
-    delete localState.plan[selectedId];
-    saveLocalState();
-    applyStateToMap(mergeSharedWithLocal(sharedPlanState, localState));
+    delete localOverrides.plan[selectedId];
+    saveLocalOverrides();
+    applyPlanToMap(getEffectiveState());
     setSelected(selectedId);
   });
 
@@ -630,61 +575,13 @@
       : colorForOwnerId(ownerSel.value);
   });
 
-  function mergeSharedWithLocal(shared, local){
-    // local plan entries override shared plan entries for display
-    const merged = {
-      owners: shared.owners,
-      wars: shared.wars,
-      plan: { ...shared.plan, ...local.plan }
-    };
-    return merged;
-  }
-
-  // Export local plan (draft)
-  $("exportBtn").addEventListener("click", () => {
-    const payload = JSON.stringify(localState, null, 2);
-    const blob = new Blob([payload], { type: "application/json" });
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = "local_plan.json";
-    a.click();
-    URL.revokeObjectURL(a.href);
-  });
-
-  // Import local plan (draft)
-  $("importBtn").addEventListener("click", async () => {
-    const input = document.createElement("input");
-    input.type = "file";
-    input.accept = "application/json";
-    input.onchange = async () => {
-      const file = input.files && input.files[0];
-      if(!file) return;
-      const text = await file.text();
-      try{
-        const parsed = JSON.parse(text);
-        localState = {
-          owners: sharedPlanState.owners,
-          plan: parsed.plan && typeof parsed.plan === "object" ? parsed.plan : {},
-          wars: []
-        };
-        saveLocalState();
-        applyStateToMap(mergeSharedWithLocal(sharedPlanState, localState));
-        setSelected(selectedId);
-      }catch{
-        alert("Invalid JSON.");
-      }
-    };
-    input.click();
-  });
-
-  // Export a ready-to-commit shared_plan.json
+  // Export a ready-to-commit shared_plan.json (merged shared + local overrides)
   $("exportSharedBtn").addEventListener("click", () => {
-    // shared export uses merged plan (so your local drafts are included)
-    const merged = mergeSharedWithLocal(sharedPlanState, localState);
+    const effective = getEffectiveState();
     const payload = JSON.stringify({
-      owners: merged.owners,
-      plan: merged.plan,
-      wars: merged.wars || []
+      owners: effective.owners,
+      plan: effective.plan,
+      wars: effective.wars || []
     }, null, 2);
 
     const blob = new Blob([payload], { type: "application/json" });
@@ -697,43 +594,35 @@
 
   $("reloadSharedBtn").addEventListener("click", async () => {
     await loadSharedPlan();
-    // show merged view (shared + local)
-    applyStateToMap(mergeSharedWithLocal(sharedPlanState, localState));
+    applyPlanToMap(getEffectiveState());
     setSelected(selectedId);
   });
 
-  // Reset local only
-  $("resetBtn").addEventListener("click", () => {
-    if(!confirm("Reset local draft changes only?")) return;
-    localStorage.removeItem(LS_KEY);
-    localState = { owners: sharedPlanState.owners, plan: {}, wars: [] };
-    saveLocalState();
-    applyStateToMap(sharedPlanState);
-    setSelected(null);
-  });
-
-  // boot
+  // Boot
   (async () => {
-    renderOwners(defaultOwners);
-    renderLegend({ owners: defaultOwners, plan: {}, wars: [] });
+    try{
+      renderOwners({ owners: defaultOwners });
+      renderLegend({ owners: defaultOwners });
 
-    await loadSvgOverlay();
-    await tryLoadGraph();
-    await tryLoadWars();
-    await loadSharedPlan();
-
-    wireMapClicks();
-
-    // Always show merged (shared + local drafts)
-    applyStateToMap(mergeSharedWithLocal(sharedPlanState, localState));
-    setSelected(null);
-
-    // Auto-refresh shared plan so everyone stays synced
-    setInterval(async () => {
+      await loadSvgOverlay();
+      await tryLoadGraph();
       await loadSharedPlan();
-      applyStateToMap(mergeSharedWithLocal(sharedPlanState, localState));
-      setSelected(selectedId);
-    }, 30000);
+
+      wireMapClicks();
+      applyPlanToMap(getEffectiveState());
+      setSelected(null);
+
+      // auto-refresh shared plan so everyone stays synced
+      setInterval(async () => {
+        await loadSharedPlan();
+        applyPlanToMap(getEffectiveState());
+        setSelected(selectedId);
+      }, 30000);
+
+    }catch(err){
+      console.error(err);
+      $("overlayStatus").textContent = "ERROR (check console)";
+    }
   })();
 </script>
 </body>
