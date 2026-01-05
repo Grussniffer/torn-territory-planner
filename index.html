@@ -196,20 +196,26 @@
 <script src="config.js"></script>
 
 <script>
-  // Expected files next to index.html:
-  // - map.png
-  // - territory_polygons_overlay.svg   (may be fragment; we auto-wrap it)
-  // - connections.json                (neighbors graph; optional but recommended)
-  // - config.js                       (contains window.APP_CONFIG with SUPABASE_URL + SUPABASE_ANON_KEY)
+  // ----------------------------
+  // Helpers
+  // ----------------------------
+  const $ = (id) => document.getElementById(id);
 
   // ----------------------------
-  // Supabase
+  // Config + Supabase client (IMPORTANT: we call it sb, NOT supabase)
   // ----------------------------
-  const { SUPABASE_URL, SUPABASE_ANON_KEY } = (window.APP_CONFIG || {});
+  const cfg = window.APP_CONFIG || {};
+  const SUPABASE_URL = cfg.SUPABASE_URL;
+  const SUPABASE_ANON_KEY = cfg.SUPABASE_ANON_KEY;
+
+  let sb = null;
   if(!SUPABASE_URL || !SUPABASE_ANON_KEY){
-    console.error("Missing window.APP_CONFIG. Create config.js with SUPABASE_URL and SUPABASE_ANON_KEY.");
+    console.error("Missing window.APP_CONFIG. Ensure config.js is deployed and correct.");
+    $("sharedStatus").textContent = "missing config.js";
+  } else {
+    sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
   }
-  const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
   const PLAN_ROW_ID = "shared";
   const EDIT_KEY_LS = "tornPlanner.editKey";
 
@@ -230,7 +236,7 @@
   let sharedUpdatedAt = null;
 
   // Local draft overrides (only on this device)
-  let localOverrides = loadLocalOverrides(); // { plan: { [territoryId]: {ownerId,note} } }
+  let localOverrides = loadLocalOverrides();
 
   // Neighbor graph
   let graph = null;
@@ -240,8 +246,7 @@
   let labelByTerrId = new Map();
   let centroidByTerrId = new Map();
 
-  // UI
-  const $ = (id) => document.getElementById(id);
+  // UI refs
   const ownerSel = $("ownerSel");
   const noteBox = $("noteBox");
   const selId = $("selId");
@@ -266,7 +271,6 @@
   }
 
   function getEffectiveState(){
-    // local overrides overwrite shared for display
     return {
       owners: sharedState.owners,
       wars: sharedState.wars,
@@ -275,7 +279,6 @@
   }
 
   function colorForOwnerId(id){
-    // deterministic HSL based on string hash
     let h = 0;
     for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0;
     const hue = h % 360;
@@ -420,11 +423,10 @@
 
   async function loadSvgOverlay(){
     const res = await fetch("./territory_polygons_overlay.svg", { cache: "no-store" });
-    if(!res.ok) throw new Error("territory_polygons_overlay.svg not found");
-
+    if(!res.ok) throw new Error("territory_polygons_overlay.svg not found (check path/case)");
     const svgText = await res.text();
 
-    // IMPORTANT: overlay file might be just polygon fragments, so we always wrap
+    // Always wrap, because your overlay file may be polygon fragments
     $("overlay").innerHTML = `<svg viewBox="0 0 725 720" xmlns="http://www.w3.org/2000/svg">${svgText}</svg>`;
 
     const svg = document.querySelector("#overlay svg");
@@ -488,11 +490,7 @@
 
       const label = labelByTerrId.get(id);
       if(label){
-        if(entry && entry.ownerId && entry.ownerId !== "unassigned"){
-          label.textContent = entry.ownerId; // short faction name
-        }else{
-          label.textContent = "";
-        }
+        label.textContent = (entry && entry.ownerId && entry.ownerId !== "unassigned") ? entry.ownerId : "";
       }
     }
   }
@@ -559,7 +557,9 @@
   // Supabase shared load/save
   // ----------------------------
   async function loadSharedPlanFromSupabase(){
-    const { data, error } = await supabase
+    if(!sb) throw new Error("Supabase not configured (config.js missing or invalid).");
+
+    const { data, error } = await sb
       .from("plans")
       .select("data, updated_at")
       .eq("id", PLAN_ROW_ID)
@@ -579,7 +579,6 @@
     $("sharedStatus").textContent = "loaded (supabase)";
     $("sharedUpdatedAt").textContent = sharedUpdatedAt ? new Date(sharedUpdatedAt).toLocaleString() : "—";
 
-    // Keep UI lists in sync with shared owners
     renderOwners(sharedState);
     renderLegend(sharedState);
   }
@@ -594,6 +593,8 @@
   }
 
   async function saveSharedPlanToSupabase(){
+    if(!sb) throw new Error("Supabase not configured (config.js missing or invalid).");
+
     const editKey = getEditKey();
     if(!editKey) throw new Error("No edit key provided.");
 
@@ -604,8 +605,7 @@
       wars: effective.wars || []
     };
 
-    // Requires your RPC function: update_shared_plan(edit_key text, new_data jsonb)
-    const { error } = await supabase.rpc("update_shared_plan", {
+    const { error } = await sb.rpc("update_shared_plan", {
       edit_key: editKey,
       new_data: payload
     });
@@ -644,11 +644,6 @@
   $("saveSharedBtn").addEventListener("click", async () => {
     try{
       await saveSharedPlanToSupabase();
-
-      // After saving shared, we can clear local overrides if you want shared to be the truth.
-      // For now we keep local overrides (in case you want drafts). Uncomment to auto-clear:
-      // localOverrides.plan = {}; saveLocalOverrides();
-
       await loadSharedPlanFromSupabase();
       applyPlanToMap(getEffectiveState());
       setSelected(selectedId);
@@ -720,9 +715,10 @@
   });
 
   // ----------------------------
-  // Boot
+  // Boot (overlay always loads even if Supabase fails)
   // ----------------------------
   (async () => {
+    // 1) Overlay + map always
     try{
       renderOwners({ owners: defaultOwners });
       renderLegend({ owners: defaultOwners });
@@ -731,28 +727,35 @@
       await tryLoadGraph();
       wireMapClicks();
 
-      // Initial shared load
-      await loadSharedPlanFromSupabase();
-
-      // Render effective state (shared + local)
       applyPlanToMap(getEffectiveState());
       setSelected(null);
-
-      // Auto-refresh shared every 30s for everyone
-      setInterval(async () => {
-        try{
-          await loadSharedPlanFromSupabase();
-          applyPlanToMap(getEffectiveState());
-          setSelected(selectedId);
-        }catch(e){
-          console.warn("Auto-refresh failed:", e?.message || e);
-        }
-      }, 30000);
-
     }catch(err){
-      console.error(err);
+      console.error("Overlay init failed:", err);
       $("overlayStatus").textContent = "ERROR (check console)";
+      return;
     }
+
+    // 2) Shared load (non-blocking)
+    try{
+      await loadSharedPlanFromSupabase();
+      applyPlanToMap(getEffectiveState());
+      setSelected(selectedId);
+    }catch(err){
+      console.warn("Shared load failed:", err);
+      $("sharedStatus").textContent = "not loaded (supabase/config)";
+    }
+
+    // 3) Auto-refresh shared every 30s if Supabase configured
+    setInterval(async () => {
+      if(!sb) return;
+      try{
+        await loadSharedPlanFromSupabase();
+        applyPlanToMap(getEffectiveState());
+        setSelected(selectedId);
+      }catch{
+        // ignore
+      }
+    }, 30000);
   })();
 </script>
 </body>
