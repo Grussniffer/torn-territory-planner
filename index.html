@@ -287,4 +287,315 @@
 
     let g = svg.querySelector("g#arrows");
     if(!g){
-      g = document.createElementNS("http://www.w3.org/2000/svg", "g
+      g = document.createElementNS("http://www.w3.org/2000/svg", "g");
+      g.setAttribute("id", "arrows");
+      // arrows above polygons but below labels
+      const labels = svg.querySelector("g#labels");
+      if(labels) svg.insertBefore(g, labels);
+      else svg.appendChild(g);
+    }
+    return g;
+  }
+
+  function clearArrows(){
+    const svg = document.querySelector("#overlay svg");
+    const g = svg && svg.querySelector("g#arrows");
+    if(g) g.innerHTML = "";
+  }
+
+  function drawNeighborArrows(selectedTerrId){
+    clearArrows();
+    if(!graph || !selectedTerrId) return;
+
+    const svg = document.querySelector("#overlay svg");
+    const g = ensureArrowLayer(svg);
+
+    const from = centroidByTerrId.get(selectedTerrId);
+    if(!from) return;
+
+    const neigh = (graph[selectedTerrId] || graph[Number(selectedTerrId)] || []).map(String);
+    const [x1,y1] = from;
+
+    for(const nid of neigh){
+      const to = centroidByTerrId.get(nid);
+      if(!to) continue;
+
+      const [x2,y2] = to;
+      const dx = x2 - x1, dy = y2 - y1;
+      const len = Math.hypot(dx, dy) || 1;
+
+      const pad = 10; // tweak if arrows overlap labels too much
+      const sx = x1 + (dx/len)*pad;
+      const sy = y1 + (dy/len)*pad;
+      const ex = x2 - (dx/len)*pad;
+      const ey = y2 - (dy/len)*pad;
+
+      const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+      line.classList.add("nei-arrow");
+      line.setAttribute("x1", sx);
+      line.setAttribute("y1", sy);
+      line.setAttribute("x2", ex);
+      line.setAttribute("y2", ey);
+      line.setAttribute("marker-end", "url(#arrowhead)");
+      g.appendChild(line);
+    }
+  }
+
+  // ---------- Load SVG + JSON ----------
+  async function loadSvgOverlay(){
+    const res = await fetch("./territory_polygons_overlay.svg", { cache: "no-store" });
+    if(!res.ok) throw new Error("territory_polygons_overlay.svg not found");
+    const svgText = await res.text();
+    document.getElementById("overlay").innerHTML = svgText;
+
+    const svg = document.querySelector("#overlay svg");
+    polygons = Array.from(svg.querySelectorAll("polygon"));
+
+    ensureLabels(svg);
+    buildCentroidCache();
+    ensureArrowLayer(svg);
+  }
+
+  async function tryLoadGraph(){
+    try{
+      const res = await fetch("./connections.json", { cache: "no-store" });
+      if(!res.ok) throw new Error("connections.json not found");
+      const payload = await res.json();
+      graph = payload.territories_neighbors || payload;
+      if(!graph || typeof graph !== "object") throw new Error("bad graph");
+      document.getElementById("graphStatus").textContent = "loaded";
+    }catch{
+      graph = null;
+      document.getElementById("graphStatus").textContent = "not loaded";
+    }
+  }
+
+  async function tryLoadWars(){
+    try{
+      const res = await fetch("./wars.json", { cache: "no-store" });
+      if(!res.ok) throw new Error("wars.json not found");
+      const payload = await res.json();
+      const list = Array.isArray(payload) ? payload : (payload.wars || []);
+      state.wars = list.map(String);
+      saveState();
+      document.getElementById("warsStatus").textContent = "loaded";
+    }catch{
+      document.getElementById("warsStatus").textContent = "not loaded";
+    }
+  }
+
+  // ---------- UI ----------
+  const ownerSel = $("ownerSel");
+  const noteBox = $("noteBox");
+  const selId = $("selId");
+  const selSwatch = $("selSwatch");
+  const neighborsBox = $("neighborsBox");
+  const legend = $("legend");
+
+  function renderOwners(){
+    ownerSel.innerHTML = "";
+    for(const o of state.owners){
+      const opt = document.createElement("option");
+      opt.value = o.id;
+      opt.textContent = o.name;
+      ownerSel.appendChild(opt);
+    }
+    renderLegend();
+  }
+
+  function renderLegend(){
+    legend.innerHTML = "";
+    for(const o of state.owners.filter(x => x.id !== "unassigned")){
+      const div = document.createElement("div");
+      div.className = "pill";
+      div.innerHTML = `<span class="swatch" style="background:${o.color}"></span><span>${o.name}</span>`;
+      legend.appendChild(div);
+    }
+  }
+
+  function applyPlanToMap(){
+    for(const poly of polygons){
+      const id = terrIdForPoly(poly);
+      const entry = state.plan[id];
+
+      poly.classList.remove("owned");
+      poly.style.removeProperty("--own-fill");
+
+      if(entry && entry.ownerId && entry.ownerId !== "unassigned"){
+        const o = ownerById(entry.ownerId);
+        poly.classList.add("owned");
+        poly.style.setProperty("--own-fill", o.color);
+      }
+
+      poly.classList.toggle("war", state.wars.includes(id));
+
+      // Update owner label text
+      const label = labelByTerrId.get(id);
+      if(label){
+        if(entry && entry.ownerId && entry.ownerId !== "unassigned"){
+          const o = ownerById(entry.ownerId);
+          label.textContent = o?.name || "";
+        }else{
+          label.textContent = "";
+        }
+      }
+    }
+  }
+
+  let selectedId = null;
+
+  function clearSelectionStyles(){
+    polygons.forEach(p => p.classList.remove("selected", "neighbor"));
+  }
+
+  function setSelected(id){
+    selectedId = id;
+    selId.textContent = id || "None";
+    clearSelectionStyles();
+
+    if(!id){
+      neighborsBox.textContent = "Select a territory to see its neighbors.";
+      ownerSel.value = "unassigned";
+      noteBox.value = "";
+      selSwatch.style.background = "rgba(255,255,255,.25)";
+      clearArrows();
+      return;
+    }
+
+    const poly = polygons.find(p => terrIdForPoly(p) === id);
+    if(poly) poly.classList.add("selected");
+
+    const entry = state.plan[id] || { ownerId: "unassigned", note: "" };
+    ownerSel.value = entry.ownerId || "unassigned";
+    noteBox.value = entry.note || "";
+
+    const o = ownerById(ownerSel.value);
+    selSwatch.style.background = o.color || "rgba(255,255,255,.25)";
+
+    if(!graph){
+      neighborsBox.textContent = "Neighbor graph not loaded. Add connections.json to enable.";
+      clearArrows();
+      return;
+    }
+
+    const neigh = graph[id] || graph[Number(id)] || [];
+    const neighIds = neigh.map(String);
+    neighborsBox.textContent = neighIds.length ? neighIds.join(", ") : "(none)";
+
+    for(const p of polygons){
+      if(neighIds.includes(terrIdForPoly(p))) p.classList.add("neighbor");
+    }
+
+    // Draw arrows to neighbors
+    drawNeighborArrows(id);
+  }
+
+  function wireMapClicks(){
+    polygons.forEach(poly => {
+      poly.addEventListener("click", (e) => {
+        e.preventDefault(); e.stopPropagation();
+        setSelected(terrIdForPoly(poly));
+      });
+    });
+    document.querySelector("#mapinner").addEventListener("click", () => setSelected(null));
+  }
+
+  // buttons
+  $("saveBtn").addEventListener("click", () => {
+    if(!selectedId) return;
+    const ownerId = ownerSel.value;
+    const note = noteBox.value || "";
+    if(ownerId === "unassigned" && !note.trim()){
+      delete state.plan[selectedId];
+    }else{
+      state.plan[selectedId] = { ownerId, note };
+    }
+    saveState();
+    applyPlanToMap();
+    setSelected(selectedId);
+  });
+
+  $("clearBtn").addEventListener("click", () => {
+    if(!selectedId) return;
+    delete state.plan[selectedId];
+    saveState();
+    applyPlanToMap();
+    setSelected(selectedId);
+  });
+
+  ownerSel.addEventListener("change", () => {
+    const o = ownerById(ownerSel.value);
+    selSwatch.style.background = o.color;
+  });
+
+  $("addOwnerBtn").addEventListener("click", () => {
+    const name = prompt("Owner/team name?");
+    if(!name) return;
+    const color = prompt("CSS color (e.g. rgba(59,130,246,.45) or #ff00ff33)", "rgba(59,130,246,.45)") || "rgba(255,255,255,.18)";
+    const id = name.toLowerCase().replace(/\s+/g,"-").replace(/[^a-z0-9\-]/g,"").slice(0,24) || ("owner-" + Math.random().toString(16).slice(2,8));
+    state.owners.push({ id, name, color });
+    saveState();
+    renderOwners();
+    applyPlanToMap(); // update fills/labels for any territories already using this owner
+    setSelected(selectedId);
+  });
+
+  $("exportBtn").addEventListener("click", () => {
+    const payload = JSON.stringify(state, null, 2);
+    const blob = new Blob([payload], { type: "application/json" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "territory-plan.json";
+    a.click();
+    URL.revokeObjectURL(a.href);
+  });
+
+  $("importBtn").addEventListener("click", async () => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = "application/json";
+    input.onchange = async () => {
+      const file = input.files && input.files[0];
+      if(!file) return;
+      const text = await file.text();
+      try{
+        const parsed = JSON.parse(text);
+        state = {
+          owners: Array.isArray(parsed.owners) && parsed.owners.length ? parsed.owners : state.owners,
+          plan: parsed.plan && typeof parsed.plan === "object" ? parsed.plan : {},
+          wars: Array.isArray(parsed.wars) ? parsed.wars.map(String) : [],
+        };
+        saveState();
+        renderOwners();
+        applyPlanToMap();
+        setSelected(selectedId);
+      }catch{
+        alert("Invalid JSON.");
+      }
+    };
+    input.click();
+  });
+
+  $("resetBtn").addEventListener("click", () => {
+    if(!confirm("Reset all saved owners + plans?")) return;
+    localStorage.removeItem(LS_KEY);
+    state = { owners: defaultOwners, plan: {}, wars: [] };
+    saveState();
+    renderOwners();
+    applyPlanToMap();
+    setSelected(null);
+  });
+
+  // boot
+  (async () => {
+    renderOwners();
+    await loadSvgOverlay();
+    await tryLoadGraph();
+    await tryLoadWars();
+    wireMapClicks();
+    applyPlanToMap();
+    setSelected(null);
+  })();
+</script>
+</body>
+</html>
