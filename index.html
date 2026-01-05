@@ -18,7 +18,7 @@
     }
     *{box-sizing:border-box}
     body{margin:0;background:var(--bg);color:var(--text);font:14px/1.35 system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,sans-serif;}
-    #app{display:grid;grid-template-columns:minmax(320px, 420px) 1fr;height:100vh;}
+    #app{display:grid;grid-template-columns:minmax(320px, 440px) 1fr;height:100vh;}
     #panel{background:var(--panel-bg);border-right:1px solid var(--panel-border);padding:14px;overflow:auto;}
     #mapwrap{display:flex;align-items:center;justify-content:center;overflow:hidden;}
     #mapinner{position:relative;width:min(100%, 1200px);aspect-ratio:725/720;}
@@ -58,6 +58,7 @@
     .small{font-size:12px;color:var(--muted);}
     .hr{height:1px;background:rgba(255,255,255,.12);margin:14px 0;}
     .list{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px;}
+    .kbd{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace;font-size:12px;color:rgba(255,255,255,.85);}
 
     /* SVG styling */
     #overlay svg{width:100%;height:100%;}
@@ -114,8 +115,12 @@
     <div class="row" style="justify-content:space-between;align-items:flex-start;">
       <div>
         <h1 class="h1">Territory Planner</h1>
-        <div class="small">Click a tile → choose owner → Save. Neighbors highlight + arrows.</div>
-        <div class="small" style="margin-top:6px;">Shared plan loads from <b>shared_plan.json</b> (auto refresh).</div>
+        <div class="small">
+          Click a tile → set owner + notes. Neighbors highlight (green) + arrows show links.
+        </div>
+        <div class="small" style="margin-top:6px;">
+          Shared plan loads from <span class="kbd">Supabase</span>. “Save shared” requires an edit key.
+        </div>
       </div>
       <div class="pill" title="Selected territory ID">
         <span class="swatch" id="selSwatch" style="background:rgba(255,255,255,.25)"></span>
@@ -130,13 +135,14 @@
     <textarea id="noteBox" placeholder="Plan, targets, timers, calls..."></textarea>
 
     <div class="row" style="margin-top:10px;">
-      <button class="primary" id="saveBtn">Save (local)</button>
-      <button class="danger" id="clearBtn">Clear</button>
+      <button class="primary" id="saveLocalBtn">Save (local)</button>
+      <button class="primary" id="saveSharedBtn">Save shared (server)</button>
+      <button class="danger" id="clearBtn" title="Clear owner + notes for selected territory (local override)">Clear</button>
     </div>
 
     <div class="small" style="margin-top:8px;">
-      GitHub Pages is static, so “Save” stores locally in your browser.
-      To publish for everyone, export <b>shared_plan.json</b> and commit it to the repo.
+      Local saves are stored in <span class="kbd">localStorage</span> (your browser).
+      Shared saves go to <span class="kbd">Supabase</span> and update everyone.
     </div>
 
     <div class="hr"></div>
@@ -148,8 +154,17 @@
 
     <label>Shared plan</label>
     <div class="row">
-      <button id="exportSharedBtn">Export shared_plan.json</button>
       <button id="reloadSharedBtn">Reload shared now</button>
+      <button id="forgetKeyBtn" class="danger" title="Forget edit key on this device">Forget edit key</button>
+    </div>
+
+    <div class="hr"></div>
+
+    <label>Local data</label>
+    <div class="row">
+      <button id="exportLocalBtn">Export local overrides</button>
+      <button id="importLocalBtn">Import local overrides</button>
+      <button id="resetLocalBtn" class="danger">Reset local</button>
     </div>
 
     <div class="hr"></div>
@@ -163,7 +178,8 @@
     <div class="small">
       Overlay: <span id="overlayStatus">loading...</span><br/>
       Neighbors: <span id="graphStatus">not loaded</span><br/>
-      Shared: <span id="sharedStatus">not loaded</span>
+      Shared: <span id="sharedStatus">not loaded</span><br/>
+      Last shared update: <span id="sharedUpdatedAt">—</span>
     </div>
   </aside>
 
@@ -175,30 +191,48 @@
   </main>
 </div>
 
+<!-- Supabase client + your config.js (repo root) -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="config.js"></script>
+
 <script>
-  // Files in repo root:
-  // - index.html
+  // Expected files next to index.html:
   // - map.png
-  // - territory_polygons_overlay.svg
-  // - connections.json (optional but recommended)
-  // - shared_plan.json (recommended)
+  // - territory_polygons_overlay.svg   (may be fragment; we auto-wrap it)
+  // - connections.json                (neighbors graph; optional but recommended)
+  // - config.js                       (contains window.APP_CONFIG with SUPABASE_URL + SUPABASE_ANON_KEY)
 
-  const LS_KEY = "tornTerritoryPlanner.local.v2";
+  // ----------------------------
+  // Supabase
+  // ----------------------------
+  const { SUPABASE_URL, SUPABASE_ANON_KEY } = (window.APP_CONFIG || {});
+  if(!SUPABASE_URL || !SUPABASE_ANON_KEY){
+    console.error("Missing window.APP_CONFIG. Create config.js with SUPABASE_URL and SUPABASE_ANON_KEY.");
+  }
+  const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  const PLAN_ROW_ID = "shared";
+  const EDIT_KEY_LS = "tornPlanner.editKey";
 
-  const defaultOwnerNames = [
-    "ht","tnu","tgr","lads","vr","ib","unt","koa","hh","vth","odyssey","trc","ufd","jokerz","ap"
-  ];
+  // ----------------------------
+  // Local overrides
+  // ----------------------------
+  const LS_KEY = "tornTerritoryPlanner.localOverrides.v1";
 
+  // Default owners (your list)
+  const defaultOwnerNames = ["ht","tnu","tgr","lads","vr","ib","unt","koa","hh","vth","odyssey","trc","ufd","jokerz","ap"];
   const defaultOwners = [
     { id: "unassigned", name: "Unassigned" },
     ...defaultOwnerNames.map(n => ({ id: n, name: n }))
   ];
 
-  // State currently rendered on the map (starts from shared, then local overrides when you save)
+  // Shared state (authoritative base from Supabase)
   let sharedState = { owners: defaultOwners, plan: {}, wars: [] };
+  let sharedUpdatedAt = null;
+
+  // Local draft overrides (only on this device)
   let localOverrides = loadLocalOverrides(); // { plan: { [territoryId]: {ownerId,note} } }
 
-  // Neighbors graph
+  // Neighbor graph
   let graph = null;
 
   // Overlay objects
@@ -231,7 +265,17 @@
     localStorage.setItem(LS_KEY, JSON.stringify(localOverrides));
   }
 
+  function getEffectiveState(){
+    // local overrides overwrite shared for display
+    return {
+      owners: sharedState.owners,
+      wars: sharedState.wars,
+      plan: { ...sharedState.plan, ...localOverrides.plan }
+    };
+  }
+
   function colorForOwnerId(id){
+    // deterministic HSL based on string hash
     let h = 0;
     for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0;
     const hue = h % 360;
@@ -377,8 +421,11 @@
   async function loadSvgOverlay(){
     const res = await fetch("./territory_polygons_overlay.svg", { cache: "no-store" });
     if(!res.ok) throw new Error("territory_polygons_overlay.svg not found");
+
     const svgText = await res.text();
-    $("overlay").innerHTML = svgText;
+
+    // IMPORTANT: overlay file might be just polygon fragments, so we always wrap
+    $("overlay").innerHTML = `<svg viewBox="0 0 725 720" xmlns="http://www.w3.org/2000/svg">${svgText}</svg>`;
 
     const svg = document.querySelector("#overlay svg");
     polygons = Array.from(svg.querySelectorAll("polygon"));
@@ -402,41 +449,6 @@
       graph = null;
       $("graphStatus").textContent = "not loaded";
     }
-  }
-
-  async function loadSharedPlan(){
-    try{
-      const res = await fetch("./shared_plan.json", { cache: "no-store" });
-      if(!res.ok) throw new Error("shared_plan.json not found");
-      const shared = await res.json();
-
-      sharedState = {
-        owners: Array.isArray(shared.owners) && shared.owners.length ? shared.owners : defaultOwners,
-        plan: (shared.plan && typeof shared.plan === "object") ? shared.plan : {},
-        wars: Array.isArray(shared.wars) ? shared.wars.map(String) : []
-      };
-
-      $("sharedStatus").textContent = "loaded";
-    }catch(e){
-      // fall back to defaults
-      sharedState = { owners: defaultOwners, plan: {}, wars: [] };
-      $("sharedStatus").textContent = "not loaded";
-      console.warn("Shared plan not loaded:", e.message);
-    }
-
-    renderOwners(sharedState);
-    renderLegend(sharedState);
-    applyPlanToMap(getEffectiveState());
-    setSelected(selectedId);
-  }
-
-  function getEffectiveState(){
-    // local overrides overwrite shared for display
-    return {
-      owners: sharedState.owners,
-      wars: sharedState.wars,
-      plan: { ...sharedState.plan, ...localOverrides.plan }
-    };
   }
 
   function renderOwners(stateObj){
@@ -477,7 +489,7 @@
       const label = labelByTerrId.get(id);
       if(label){
         if(entry && entry.ownerId && entry.ownerId !== "unassigned"){
-          label.textContent = entry.ownerId; // owner id == your short faction name
+          label.textContent = entry.ownerId; // short faction name
         }else{
           label.textContent = "";
         }
@@ -543,8 +555,68 @@
     document.querySelector("#mapinner").addEventListener("click", () => setSelected(null));
   }
 
-  // Local save (overrides shared)
-  $("saveBtn").addEventListener("click", () => {
+  // ----------------------------
+  // Supabase shared load/save
+  // ----------------------------
+  async function loadSharedPlanFromSupabase(){
+    const { data, error } = await supabase
+      .from("plans")
+      .select("data, updated_at")
+      .eq("id", PLAN_ROW_ID)
+      .single();
+
+    if(error) throw error;
+
+    sharedUpdatedAt = data?.updated_at || null;
+    const shared = data?.data || { owners: [], plan: {}, wars: [] };
+
+    sharedState = {
+      owners: (shared.owners && shared.owners.length) ? shared.owners : defaultOwners,
+      plan: (shared.plan && typeof shared.plan === "object") ? shared.plan : {},
+      wars: Array.isArray(shared.wars) ? shared.wars.map(String) : []
+    };
+
+    $("sharedStatus").textContent = "loaded (supabase)";
+    $("sharedUpdatedAt").textContent = sharedUpdatedAt ? new Date(sharedUpdatedAt).toLocaleString() : "—";
+
+    // Keep UI lists in sync with shared owners
+    renderOwners(sharedState);
+    renderLegend(sharedState);
+  }
+
+  function getEditKey(){
+    let k = localStorage.getItem(EDIT_KEY_LS);
+    if(!k){
+      k = prompt("Enter edit key to save shared plan:");
+      if(k) localStorage.setItem(EDIT_KEY_LS, k);
+    }
+    return k || "";
+  }
+
+  async function saveSharedPlanToSupabase(){
+    const editKey = getEditKey();
+    if(!editKey) throw new Error("No edit key provided.");
+
+    const effective = getEffectiveState();
+    const payload = {
+      owners: effective.owners,
+      plan: effective.plan,
+      wars: effective.wars || []
+    };
+
+    // Requires your RPC function: update_shared_plan(edit_key text, new_data jsonb)
+    const { error } = await supabase.rpc("update_shared_plan", {
+      edit_key: editKey,
+      new_data: payload
+    });
+
+    if(error) throw error;
+  }
+
+  // ----------------------------
+  // Buttons / events
+  // ----------------------------
+  $("saveLocalBtn").addEventListener("click", () => {
     if(!selectedId) return;
 
     const ownerId = ownerSel.value;
@@ -569,36 +641,87 @@
     setSelected(selectedId);
   });
 
+  $("saveSharedBtn").addEventListener("click", async () => {
+    try{
+      await saveSharedPlanToSupabase();
+
+      // After saving shared, we can clear local overrides if you want shared to be the truth.
+      // For now we keep local overrides (in case you want drafts). Uncomment to auto-clear:
+      // localOverrides.plan = {}; saveLocalOverrides();
+
+      await loadSharedPlanFromSupabase();
+      applyPlanToMap(getEffectiveState());
+      setSelected(selectedId);
+      alert("Saved to server.");
+    }catch(e){
+      console.error(e);
+      alert("Save failed: " + (e?.message || e));
+    }
+  });
+
+  $("reloadSharedBtn").addEventListener("click", async () => {
+    try{
+      await loadSharedPlanFromSupabase();
+      applyPlanToMap(getEffectiveState());
+      setSelected(selectedId);
+    }catch(e){
+      console.error(e);
+      alert("Reload failed: " + (e?.message || e));
+    }
+  });
+
+  $("forgetKeyBtn").addEventListener("click", () => {
+    localStorage.removeItem(EDIT_KEY_LS);
+    alert("Edit key forgotten on this device.");
+  });
+
   ownerSel.addEventListener("change", () => {
     selSwatch.style.background = (ownerSel.value === "unassigned")
       ? "rgba(255,255,255,.25)"
       : colorForOwnerId(ownerSel.value);
   });
 
-  // Export a ready-to-commit shared_plan.json (merged shared + local overrides)
-  $("exportSharedBtn").addEventListener("click", () => {
-    const effective = getEffectiveState();
-    const payload = JSON.stringify({
-      owners: effective.owners,
-      plan: effective.plan,
-      wars: effective.wars || []
-    }, null, 2);
-
+  $("exportLocalBtn").addEventListener("click", () => {
+    const payload = JSON.stringify(localOverrides, null, 2);
     const blob = new Blob([payload], { type: "application/json" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
-    a.download = "shared_plan.json";
+    a.download = "local_overrides.json";
     a.click();
     URL.revokeObjectURL(a.href);
   });
 
-  $("reloadSharedBtn").addEventListener("click", async () => {
-    await loadSharedPlan();
+  $("importLocalBtn").addEventListener("click", () => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = "application/json";
+    input.onchange = async () => {
+      const file = input.files && input.files[0];
+      if(!file) return;
+      try{
+        const parsed = JSON.parse(await file.text());
+        localOverrides = { plan: (parsed.plan && typeof parsed.plan === "object") ? parsed.plan : {} };
+        saveLocalOverrides();
+        applyPlanToMap(getEffectiveState());
+        setSelected(selectedId);
+      }catch{
+        alert("Invalid JSON.");
+      }
+    };
+    input.click();
+  });
+
+  $("resetLocalBtn").addEventListener("click", () => {
+    if(!confirm("Reset local overrides on this device?")) return;
+    localStorage.removeItem(LS_KEY);
+    localOverrides = { plan: {} };
     applyPlanToMap(getEffectiveState());
     setSelected(selectedId);
   });
 
+  // ----------------------------
   // Boot
+  // ----------------------------
   (async () => {
     try{
       renderOwners({ owners: defaultOwners });
@@ -606,17 +729,24 @@
 
       await loadSvgOverlay();
       await tryLoadGraph();
-      await loadSharedPlan();
-
       wireMapClicks();
+
+      // Initial shared load
+      await loadSharedPlanFromSupabase();
+
+      // Render effective state (shared + local)
       applyPlanToMap(getEffectiveState());
       setSelected(null);
 
-      // auto-refresh shared plan so everyone stays synced
+      // Auto-refresh shared every 30s for everyone
       setInterval(async () => {
-        await loadSharedPlan();
-        applyPlanToMap(getEffectiveState());
-        setSelected(selectedId);
+        try{
+          await loadSharedPlanFromSupabase();
+          applyPlanToMap(getEffectiveState());
+          setSelected(selectedId);
+        }catch(e){
+          console.warn("Auto-refresh failed:", e?.message || e);
+        }
       }, 30000);
 
     }catch(err){
