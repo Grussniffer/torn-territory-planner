@@ -231,6 +231,32 @@
     ...defaultOwnerNames.map(n => ({ id: n, name: n }))
   ];
 
+  // ----------------------------
+  // ✅ FULL COLOR CHART (EDIT THESE ANYTIME)
+  // ----------------------------
+  const OWNER_COLORS = {
+    // Requested by you:
+    "NWA":   "rgba(0, 45, 160, 0.45)",   // dark blue
+    "NL/OBN":"rgba(140, 30, 200, 0.45)", // purple
+
+    // Free-for-all (picked nice distinct colors):
+    "ht":     "rgba(255, 60, 60, 0.45)",
+    "tnu":    "rgba(0, 220, 160, 0.45)",
+    "tgr":    "rgba(255, 170, 0, 0.45)",
+    "lads":   "rgba(255, 120, 0, 0.45)",
+    "vr":     "rgba(0, 170, 255, 0.45)",
+    "ib":     "rgba(255, 0, 210, 0.45)",
+    "unt":    "rgba(140, 255, 0, 0.45)",
+    "koa":    "rgba(0, 255, 230, 0.45)",
+    "hh":     "rgba(200, 200, 200, 0.35)",
+    "vth":    "rgba(255, 240, 0, 0.45)",
+    "odyssey":"rgba(60, 120, 255, 0.45)",
+    "trc":    "rgba(255, 90, 200, 0.45)",
+    "ufd":    "rgba(0, 255, 90, 0.45)",
+    "jokerz": "rgba(255, 80, 140, 0.45)",
+    "ap":     "rgba(0, 200, 255, 0.45)"
+  };
+
   // Shared state (authoritative base from Supabase)
   let sharedState = { owners: defaultOwners, plan: {}, wars: [] };
   let sharedUpdatedAt = null;
@@ -278,7 +304,13 @@
     };
   }
 
+  // ----------------------------
+  // ✅ Use your manual colors first
+  // ----------------------------
   function colorForOwnerId(id){
+    if(OWNER_COLORS[id]) return OWNER_COLORS[id];
+
+    // fallback (auto color if missing)
     let h = 0;
     for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0;
     const hue = h % 360;
@@ -426,7 +458,6 @@
     if(!res.ok) throw new Error("territory_polygons_overlay.svg not found (check path/case)");
     const svgText = await res.text();
 
-    // Always wrap, because your overlay file may be polygon fragments
     $("overlay").innerHTML = `<svg viewBox="0 0 725 720" xmlns="http://www.w3.org/2000/svg">${svgText}</svg>`;
 
     const svg = document.querySelector("#overlay svg");
