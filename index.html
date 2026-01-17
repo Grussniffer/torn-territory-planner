@@ -44,15 +44,13 @@
     }
     select option,
     select optgroup{
-      background-color: #111; /* solid dark */
-      color: #f3f4f6;         /* bright readable text */
+      background-color: #111;
+      color: #f3f4f6;
     }
     select option:checked{
       background-color: #1f2937;
       color: #ffffff;
     }
-
-    /* If OS/browser forces a light dropdown, keep it readable */
     @media (prefers-color-scheme: light){
       select option,
       select optgroup{
@@ -202,6 +200,11 @@
     <label>Legend</label>
     <div class="list" id="legend"></div>
 
+    <!-- ✅ NEW: Faction counter display -->
+    <div class="hr"></div>
+    <label>Faction counts</label>
+    <div class="list" id="ownerCounts"></div>
+
     <div class="hr"></div>
 
     <label>Status</label>
@@ -265,11 +268,9 @@
   // ✅ FULL COLOR CHART (EDIT THESE ANYTIME)
   // ----------------------------
   const OWNER_COLORS = {
-    // Requested by you:
     "NWA":   "rgba(0, 45, 160, 0.95)",   // dark blue
     "NL/OBN":"rgba(140, 30, 200, 0.95)", // purple
 
-    // Free-for-all (picked nice distinct colors):
     "ht":     "rgba(255, 60, 60, 0.45)",
     "tnu":    "rgba(0, 220, 160, 0.45)",
     "tgr":    "rgba(255, 170, 0, 0.45)",
@@ -305,6 +306,7 @@
   const selSwatch = $("selSwatch");
   const neighborsBox = $("neighborsBox");
   const legend = $("legend");
+  const ownerCounts = $("ownerCounts"); // ✅ NEW
 
   let selectedId = null;
 
@@ -336,7 +338,6 @@
   function colorForOwnerId(id){
     if(OWNER_COLORS[id]) return OWNER_COLORS[id];
 
-    // fallback (auto color if missing)
     let h = 0;
     for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0;
     const hue = h % 360;
@@ -531,6 +532,49 @@
     }
   }
 
+  // ✅ NEW: build counts
+  function computeOwnerCounts(stateObj){
+    const counts = {};
+    for(const o of stateObj.owners){
+      counts[o.id] = 0;
+    }
+
+    for(const terrId in stateObj.plan){
+      const entry = stateObj.plan[terrId];
+      if(!entry || !entry.ownerId) continue;
+      if(entry.ownerId === "unassigned") continue;
+      if(counts[entry.ownerId] === undefined) counts[entry.ownerId] = 0;
+      counts[entry.ownerId]++;
+    }
+
+    return counts;
+  }
+
+  // ✅ NEW: render counts
+  function renderOwnerCounts(stateObj){
+    if(!ownerCounts) return;
+
+    const counts = computeOwnerCounts(stateObj);
+
+    const items = stateObj.owners
+      .filter(o => o.id !== "unassigned")
+      .map(o => ({ owner: o, count: counts[o.id] || 0 }))
+      .sort((a,b) => b.count - a.count || a.owner.id.localeCompare(b.owner.id));
+
+    ownerCounts.innerHTML = "";
+    for(const item of items){
+      const div = document.createElement("div");
+      div.className = "pill";
+      div.title = `Territories owned by ${item.owner.name}`;
+
+      div.innerHTML = `
+        <span class="swatch" style="background:${colorForOwnerId(item.owner.id)}"></span>
+        <span>${item.owner.name}: <b style="color:var(--text)">${item.count}</b></span>
+      `;
+      ownerCounts.appendChild(div);
+    }
+  }
+
   function applyPlanToMap(stateObj){
     for(const poly of polygons){
       const id = terrIdForPoly(poly);
@@ -550,6 +594,9 @@
         label.textContent = (entry && entry.ownerId && entry.ownerId !== "unassigned") ? entry.ownerId : "";
       }
     }
+
+    // ✅ update counters whenever map changes
+    renderOwnerCounts(stateObj);
   }
 
   function clearSelectionStyles(){
@@ -641,10 +688,10 @@
   }
 
   function getEditKey(){
-    let k = localStorage.getItem(EDIT_KEY_LS);
+    let k = localStorage.getItem("tornPlanner.editKey");
     if(!k){
       k = prompt("Enter edit key to save shared plan:");
-      if(k) localStorage.setItem(EDIT_KEY_LS, k);
+      if(k) localStorage.setItem("tornPlanner.editKey", k);
     }
     return k || "";
   }
@@ -723,7 +770,7 @@
   });
 
   $("forgetKeyBtn").addEventListener("click", () => {
-    localStorage.removeItem(EDIT_KEY_LS);
+    localStorage.removeItem("tornPlanner.editKey");
     alert("Edit key forgotten on this device.");
   });
 
@@ -765,7 +812,7 @@
 
   $("resetLocalBtn").addEventListener("click", () => {
     if(!confirm("Reset local overrides on this device?")) return;
-    localStorage.removeItem(LS_KEY);
+    localStorage.removeItem("tornTerritoryPlanner.localOverrides.v1");
     localOverrides = { plan: {} };
     applyPlanToMap(getEffectiveState());
     setSelected(selectedId);
