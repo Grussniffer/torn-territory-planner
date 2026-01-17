@@ -36,6 +36,36 @@
       padding:10px;
       outline:none;
     }
+
+    /* ✅ FIX: Improve dropdown readability in dark mode */
+    select{
+      background: rgba(255,255,255,.06);
+      color: var(--text);
+    }
+    select option,
+    select optgroup{
+      background-color: #111; /* solid dark */
+      color: #f3f4f6;         /* bright readable text */
+    }
+    select option:checked{
+      background-color: #1f2937;
+      color: #ffffff;
+    }
+
+    /* If OS/browser forces a light dropdown, keep it readable */
+    @media (prefers-color-scheme: light){
+      select option,
+      select optgroup{
+        background-color: #ffffff;
+        color: #111827;
+      }
+      select option:checked{
+        background-color: #e5e7eb;
+        color: #111827;
+      }
+    }
+    /* ✅ END FIX */
+
     textarea{min-height:90px;resize:vertical;}
     button{
       background:rgba(255,255,255,.08);
@@ -225,7 +255,7 @@
   const LS_KEY = "tornTerritoryPlanner.localOverrides.v1";
 
   // Default owners (your list)
-  const defaultOwnerNames = ["ht","tnu","tgr","lads","vr","ib","unt","koa","hh","vth","odyssey","trc","ufd","jokerz","ap","NWA","NL/OBN"];
+  const defaultOwnerNames = ["ht","tnu","tgr","lads","vr","unt","koa","hh","vth","trc","ufd","jokerz","NWA","NL/OBN"];
   const defaultOwners = [
     { id: "unassigned", name: "Unassigned" },
     ...defaultOwnerNames.map(n => ({ id: n, name: n }))
@@ -244,17 +274,13 @@
     "tnu":    "rgba(0, 220, 160, 0.45)",
     "tgr":    "rgba(255, 170, 0, 0.45)",
     "lads":   "rgba(255, 120, 0, 0.45)",
-    "vr":     "rgba(0, 170, 255, 0.45)",
-    "ib":     "rgba(255, 0, 210, 0.45)",
     "unt":    "rgba(140, 255, 0, 0.45)",
     "koa":    "rgba(0, 255, 230, 0.45)",
     "hh":     "rgba(200, 200, 200, 0.35)",
     "vth":    "rgba(255, 240, 0, 0.45)",
-    "odyssey":"rgba(60, 120, 255, 0.45)",
     "trc":    "rgba(255, 90, 200, 0.45)",
     "ufd":    "rgba(0, 255, 90, 0.45)",
     "jokerz": "rgba(255, 80, 140, 0.45)",
-    "ap":     "rgba(0, 200, 255, 0.45)"
   };
 
   // Shared state (authoritative base from Supabase)
