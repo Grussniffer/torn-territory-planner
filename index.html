@@ -259,8 +259,14 @@
 
   // Default owners (your list)
   const defaultOwnerNames = ["ht","tnu","tgr","lads","vr","unt","koa","hh","vth","trc","ufd","jokerz","NWA","NL/OBN"];
+
+  // ✅ NEW: Added "pink" option with NO NAME (blank) for fill-only
   const defaultOwners = [
     { id: "unassigned", name: "Unassigned" },
+
+    // ✅ Pink fill ONLY (no label text)
+    { id: "pink", name: "" },
+
     ...defaultOwnerNames.map(n => ({ id: n, name: n }))
   ];
 
@@ -268,6 +274,9 @@
   // ✅ FULL COLOR CHART (EDIT THESE ANYTIME)
   // ----------------------------
   const OWNER_COLORS = {
+    // ✅ NEW: Solid Pink (NO transparency)
+    "pink": "#FF00FF",
+
     "NWA":   "rgba(0, 45, 160, 0.95)",   // dark blue
     "NL/OBN":"rgba(140, 30, 200, 0.95)", // purple
 
@@ -516,7 +525,10 @@
     for(const o of stateObj.owners){
       const opt = document.createElement("option");
       opt.value = o.id;
-      opt.textContent = o.name;
+
+      // ✅ Show something readable in dropdown, but keep true "no label" on map
+      opt.textContent = (o.id === "pink") ? "Pink (fill only)" : o.name;
+
       ownerSel.appendChild(opt);
     }
   }
@@ -524,7 +536,9 @@
   function renderLegend(stateObj){
     legend.innerHTML = "";
     for(const o of stateObj.owners){
-      if(o.id === "unassigned") continue;
+      // ✅ Don't show unassigned OR fill-only pink in legend
+      if(o.id === "unassigned" || o.id === "pink") continue;
+
       const div = document.createElement("div");
       div.className = "pill";
       div.innerHTML = `<span class="swatch" style="background:${colorForOwnerId(o.id)}"></span><span>${o.name}</span>`;
@@ -565,11 +579,11 @@
     for(const item of items){
       const div = document.createElement("div");
       div.className = "pill";
-      div.title = `Territories owned by ${item.owner.name}`;
+      div.title = `Territories owned by ${item.owner.name || item.owner.id}`;
 
       div.innerHTML = `
         <span class="swatch" style="background:${colorForOwnerId(item.owner.id)}"></span>
-        <span>${item.owner.name}: <b style="color:var(--text)">${item.count}</b></span>
+        <span>${item.owner.name || item.owner.id}: <b style="color:var(--text)">${item.count}</b></span>
       `;
       ownerCounts.appendChild(div);
     }
@@ -591,7 +605,11 @@
 
       const label = labelByTerrId.get(id);
       if(label){
-        label.textContent = (entry && entry.ownerId && entry.ownerId !== "unassigned") ? entry.ownerId : "";
+        const ownerId = (entry && entry.ownerId && entry.ownerId !== "unassigned") ? entry.ownerId : "";
+        const ownerObj = stateObj.owners.find(o => o.id === ownerId);
+
+        // ✅ Only show label if owner has a visible name
+        label.textContent = (ownerObj && ownerObj.name) ? ownerObj.name : "";
       }
     }
 
